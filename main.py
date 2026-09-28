@@ -10,13 +10,12 @@ from kivy.uix.scrollview import ScrollView
 from kivy.core.window import Window
 from kivy.graphics import Color, RoundedRectangle, Line, Rectangle, PushMatrix, PopMatrix, Rotate
 from kivy.clock import Clock
-import pandas as pd
+import openpyxl
 import os
 import subprocess
 import platform
 from datetime import datetime
 
-# Kompyuterda telefon oynasi ko'rinishini hosil qilish
 Window.size = (400, 750)
 Window.resizable = False
 Window.clearcolor = (0.95, 0.96, 0.98, 1)
@@ -24,7 +23,6 @@ Window.clearcolor = (0.95, 0.96, 0.98, 1)
 EXCEL_PATH = "2-TB ZIP platalar 31.07.2025.xlsx"
 
 def get_emoji_font():
-    """Windows va boshqa Tizimlarda emojilar to'g'ri ko'rinishi uchun shrift yo'li"""
     if platform.system() == 'Windows':
         font_p = "C:\\Windows\\Fonts\\seguiemj.ttf"
         if os.path.exists(font_p):
@@ -34,62 +32,80 @@ def get_emoji_font():
 EMOJI_FONT = get_emoji_font()
 
 def load_excel_database():
-    if os.path.exists(EXCEL_PATH):
-        try:
-            df = pd.read_excel(EXCEL_PATH, sheet_name=0)
-            df.columns = df.columns.str.strip()
-            if "Tekshirilgan" not in df.columns:
-                df["Tekshirilgan"] = ""
-            if "Holati" not in df.columns:
-                df["Holati"] = "Soz"
+    if not os.path.exists(EXCEL_PATH):
+        return None
+    try:
+        wb = openpyxl.load_workbook(EXCEL_PATH, data_only=True)
+        sheet = wb.active
+        
+        headers = [str(cell.value).strip() if cell.value is not None else "" for cell in sheet[1]]
+        
+        data = []
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            if any(row):
+                row_dict = {}
+                for h, val in zip(headers, row):
+                    val_str = str(val).strip() if val is not None else ""
+                    row_dict[h] = val_str
+                if "Tekshirilgan" not in row_dict:
+                    row_dict["Tekshirilgan"] = ""
+                if "Holati" not in row_dict:
+                    row_dict["Holati"] = "Soz"
+                if "Plata" in row_dict:
+                    row_dict["Plata"] = row_dict["Plata"].upper()
+                if "Zavod raqami" in row_dict:
+                    row_dict["Zavod raqami"] = row_dict["Zavod raqami"].upper()
+                data.append(row_dict)
+        wb.close()
+        return data
+    except Exception as e:
+        print("Excel o'qishda xatolik:", e)
+        return None
+
+def save_all_data_to_excel(data_list):
+    try:
+        if not data_list:
+            return False
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        
+        headers = list(data_list[0].keys())
+        ws.append(headers)
+        
+        for idx, row_dict in enumerate(data_list, start=1):
+            if '№' in headers:
+                row_dict['№'] = idx
+            row_vals = [row_dict.get(h, "") for h in headers]
+            ws.append(row_vals)
             
-            if 'Plata' in df.columns:
-                df['Plata'] = df['Plata'].astype(str).str.upper()
-            if 'Zavod raqami' in df.columns:
-                df['Zavod raqami'] = df['Zavod raqami'].astype(str).str.upper()
-                
-            return df
-        except Exception as e:
-            print("Xatolik:", e)
-            return None
-    return None
+        wb.save(EXCEL_PATH)
+        wb.close()
+        return True
+    except Exception as e:
+        print("Saqlashda xatolik:", e)
+        return False
 
 def save_to_excel_by_category(new_row_data):
     try:
-        df = load_excel_database()
-        if df is not None:
-            if 'Plata' in new_row_data and isinstance(new_row_data['Plata'], str):
-                new_row_data['Plata'] = new_row_data['Plata'].upper()
-            if 'Zavod raqami' in new_row_data and isinstance(new_row_data['Zavod raqami'], str):
-                new_row_data['Zavod raqami'] = new_row_data['Zavod raqami'].upper()
+        data = load_excel_database() or []
+        
+        if 'Plata' in new_row_data and isinstance(new_row_data['Plata'], str):
+            new_row_data['Plata'] = new_row_data['Plata'].upper()
+        if 'Zavod raqami' in new_row_data and isinstance(new_row_data['Zavod raqami'], str):
+            new_row_data['Zavod raqami'] = new_row_data['Zavod raqami'].upper()
 
-            chosen_qurilma = new_row_data.get('Qurilma', '')
-            df['Normalized_Qurilma'] = df['Qurilma'].apply(normalize_qurilma_name)
-            
-            qurilma_mask = df['Normalized_Qurilma'].astype(str).str.strip() == chosen_qurilma.strip()
-            
-            if qurilma_mask.any():
-                matching_indices = df[qurilma_mask].index
-                insert_pos = matching_indices[-1] + 1
-            else:
-                insert_pos = len(df)
-
-            df.drop(columns=['Normalized_Qurilma'], inplace=True, errors='ignore')
-
-            df_before = df.iloc[:insert_pos].copy()
-            df_after = df.iloc[insert_pos:].copy()
-            
-            new_df = pd.DataFrame([new_row_data])
-            updated_df = pd.concat([df_before, new_df, df_after], ignore_index=True)
-            
-            if '№' in updated_df.columns:
-                updated_df['№'] = range(1, len(updated_df) + 1)
-
-            updated_df.to_excel(EXCEL_PATH, index=False)
-            return True
+        chosen_qurilma = normalize_qurilma_name(new_row_data.get('Qurilma', ''))
+        
+        insert_pos = len(data)
+        for i, r in enumerate(data):
+            if normalize_qurilma_name(r.get('Qurilma', '')) == chosen_qurilma:
+                insert_pos = i + 1
+                
+        data.insert(insert_pos, new_row_data)
+        return save_all_data_to_excel(data)
     except Exception as e:
-        print("Saqlashda xatolik:", e)
-    return False
+        print("Qo'shishda xatolik:", e)
+        return False
 
 def open_file_externally(filename):
     try:
@@ -106,17 +122,14 @@ def normalize_qurilma_name(q_name):
     if not isinstance(q_name, str):
         return str(q_name)
     q_upper = q_name.upper().strip()
-    
     if "OSN6800" in q_upper:
         return None
-        
     if any(x in q_upper for x in ["OSN2500", "OSN3500", "OSN8800", "OSN9800"]):
         return "OSN2500/3500/8800/9800"
     if "SMS" in q_upper or "U-NODE" in q_upper:
         return "SMS / U-Node"
     return q_name.strip()
 
-# Yuklanish uchun aylanma yumaloqcha (Spinner)
 class LoadingSpinner(BoxLayout):
     def __init__(self, **kwargs):
         super(LoadingSpinner, self).__init__(**kwargs)
@@ -387,11 +400,11 @@ class ExcelMenuScreen(Screen):
         Clock.schedule_once(lambda dt: func(), 0.3)
 
     def export_sfp(self):
-        df = load_excel_database()
-        if df is not None:
+        data = load_excel_database()
+        if data is not None:
             time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.saved_file = f"SFP_modullar_{time_str}.xlsx"
-            df.to_excel(self.saved_file, index=False)
+            save_all_data_to_excel(data)
             self.msg_label.color = (0, 0.6, 0.3, 1)
             self.msg_label.text = f"Saqlandi: {self.saved_file}"
             self.btn_open.opacity = 1
@@ -399,11 +412,11 @@ class ExcelMenuScreen(Screen):
         self.spinner.opacity = 0
 
     def export_qurilma(self):
-        df = load_excel_database()
-        if df is not None and 'Qurilma' in df.columns:
+        data = load_excel_database()
+        if data is not None:
             time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.saved_file = f"Qurilmalar_{time_str}.xlsx"
-            df.to_excel(self.saved_file, index=False)
+            save_all_data_to_excel(data)
             self.msg_label.color = (0, 0.6, 0.3, 1)
             self.msg_label.text = f"Saqlandi: {self.saved_file}"
             self.btn_open.opacity = 1
@@ -464,8 +477,8 @@ class ExcelPlatalarMenuScreen(Screen):
         Clock.schedule_once(lambda dt: self.export_excel(mode), 0.3)
 
     def export_excel(self, mode):
-        df = load_excel_database()
-        if df is None:
+        data = load_excel_database()
+        if data is None:
             self.msg_label.color = (0.8, 0.2, 0.2, 1)
             self.msg_label.text = "Excel bazasi topilmadi!"
             self.spinner.opacity = 0
@@ -473,16 +486,13 @@ class ExcelPlatalarMenuScreen(Screen):
 
         time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         if mode == 'all':
-            export_df = df
+            export_data = data
             self.saved_file = f"Platalar_Umumiy_{time_str}.xlsx"
         else:
-            if "Joylashgan o'rni" in df.columns:
-                export_df = df[df["Joylashgan o'rni"].astype(str).str.strip().str.lower() == mode.lower()]
-            else:
-                export_df = pd.DataFrame()
+            export_data = [r for r in data if r.get("Joylashgan o'rni", "").strip().lower() == mode.lower()]
             self.saved_file = f"Plata_{mode.replace(' ', '_')}_{time_str}.xlsx"
 
-        if export_df.empty:
+        if not export_data:
             self.msg_label.color = (0.8, 0.2, 0.2, 1)
             self.msg_label.text = "Tanlangan hudud bo'yicha ma'lumot topilmadi!"
             self.btn_open.opacity = 0
@@ -491,7 +501,7 @@ class ExcelPlatalarMenuScreen(Screen):
             return
 
         try:
-            export_df.to_excel(self.saved_file, index=False)
+            save_all_data_to_excel(export_data)
             self.msg_label.color = (0, 0.6, 0.3, 1)
             self.msg_label.text = f"Saqlandi: {self.saved_file}"
             self.btn_open.opacity = 1
@@ -579,9 +589,9 @@ class PlatalarScreen(Screen):
 
     def yukla_qurilmalar(self):
         self.list_layout.clear_widgets()
-        df = load_excel_database()
-        if df is not None and 'Qurilma' in df.columns:
-            raw_qurilmalar = df['Qurilma'].dropna().unique()
+        data = load_excel_database()
+        if data:
+            raw_qurilmalar = [r.get('Qurilma', '') for r in data if r.get('Qurilma')]
             qurilmalar = sorted(list(set(normalize_qurilma_name(q) for q in raw_qurilmalar if normalize_qurilma_name(q) is not None)))
             for q in qurilmalar:
                 btn = SoliqButton(text=f"🖥 {str(q)}", bg_color=(0.0, 0.45, 0.45, 1), size_hint_y=None, height=50)
@@ -654,33 +664,27 @@ class PlatalarDetalScreen(Screen):
 
     def load_table_data(self, search_query=""):
         self.grid_layout.clear_widgets()
-        df = load_excel_database()
-        if df is not None:
-            df['Normalized_Qurilma'] = df['Qurilma'].apply(normalize_qurilma_name)
-            filtrlangan = df[df['Normalized_Qurilma'].astype(str).str.strip() == self.current_qurilma.strip()]
+        data = load_excel_database()
+        if data:
+            filtrlangan = [r for r in data if normalize_qurilma_name(r.get('Qurilma', '')) == self.current_qurilma.strip()]
             
             if search_query:
                 q = search_query.lower()
-                filtrlangan = filtrlangan[
-                    filtrlangan['Plata'].astype(str).str.lower().str.contains(q) |
-                    filtrlangan['Zavod raqami'].astype(str).str.lower().str.endswith(q) |
-                    filtrlangan['Inv raqami'].astype(str).str.lower().str.contains(q)
+                filtrlangan = [
+                    r for r in filtrlangan if
+                    q in r.get('Plata', '').lower() or
+                    r.get('Zavod raqami', '').lower().endswith(q) or
+                    q in r.get('Inv raqami', '').lower()
                 ]
 
-            if not filtrlangan.empty:
+            if filtrlangan:
                 col_widths = [45, 130, 150, 110, 150, 100]
-                for index, row in filtrlangan.reset_index(drop=True).iterrows():
+                for index, row in enumerate(filtrlangan):
                     plata = str(row.get('Plata', '')).upper()
                     zavod = str(row.get('Zavod raqami', '')).upper()
                     inv = str(row.get('Inv raqami', ''))
                     joy = str(row.get("Joylashgan o'rni", ''))
                     tekshirildi = str(row.get("Tekshirilgan", ''))
-
-                    plata = '' if plata == 'NAN' else plata
-                    zavod = '' if zavod == 'NAN' else zavod
-                    inv = '' if inv == 'nan' else inv
-                    joy = '' if joy == 'nan' else joy
-                    tekshirildi = '' if tekshirildi == 'nan' else tekshirildi
 
                     self.grid_layout.add_widget(CellLabel(text=str(index + 1), size_hint_y=None, height=40, size_hint_x=None, width=col_widths[0]))
                     self.grid_layout.add_widget(CellLabel(text=plata, size_hint_y=None, height=40, size_hint_x=None, width=col_widths[1]))
@@ -844,9 +848,9 @@ class AddPlataScreen(Screen):
 
     def yukla_qurilmalar(self):
         self.qurilma_layout.clear_widgets()
-        df = load_excel_database()
-        if df is not None and 'Qurilma' in df.columns:
-            raw_qurilmalar = df['Qurilma'].dropna().unique()
+        data = load_excel_database()
+        if data:
+            raw_qurilmalar = [r.get('Qurilma', '') for r in data if r.get('Qurilma')]
             qurilmalar = sorted(list(set(normalize_qurilma_name(q) for q in raw_qurilmalar if normalize_qurilma_name(q) is not None)))
             for q in qurilmalar:
                 btn = SoliqButton(text=f"🖥 {str(q)}", bg_color=(0.0, 0.45, 0.45, 1), size_hint_y=None, height=38)
@@ -927,11 +931,10 @@ class AddPlataScreen(Screen):
             self.is_valid_plata = True
             return
 
-        df = load_excel_database()
-        if df is not None and 'Qurilma' in df.columns and 'Plata' in df.columns:
-            df['Normalized_Qurilma'] = df['Qurilma'].apply(normalize_qurilma_name)
-            qurilma_df = df[df['Normalized_Qurilma'].astype(str).str.strip() == self.chosen_qurilma.strip()]
-            all_platas = qurilma_df['Plata'].dropna().astype(str).unique()
+        data = load_excel_database()
+        if data:
+            qurilma_rows = [r for r in data if normalize_qurilma_name(r.get('Qurilma', '')) == self.chosen_qurilma.strip()]
+            all_platas = sorted(list(set(r.get('Plata', '') for r in qurilma_rows if r.get('Plata'))))
             
             matched = [p for p in all_platas if val in p.lower()]
             
@@ -1140,12 +1143,12 @@ class MovePlataScreen(Screen):
         search_val = value.strip().lower()
         if not search_val:
             return
-        df = load_excel_database()
-        if df is not None and 'Zavod raqami' in df.columns:
-            matched = df[df['Zavod raqami'].astype(str).str.lower().str.endswith(search_val)]
+        data = load_excel_database()
+        if data:
+            matched = [r for r in data if r.get('Zavod raqami', '').lower().endswith(search_val)]
             
-            if not matched.empty:
-                for idx, row in matched.head(10).iterrows():
+            if matched:
+                for row in matched[:10]:
                     plata = str(row.get('Plata', '')).upper()
                     zavod = str(row.get('Zavod raqami', '')).upper()
                     
@@ -1232,29 +1235,19 @@ class MovePlataScreen(Screen):
 
     def update_location(self):
         yangi_joy = self.manual_yangi_joy.text.strip() if self.manual_yangi_joy.opacity == 1 else self.chosen_yangi_joy
-        df = load_excel_database()
-        if df is not None:
-            mask = df['Zavod raqami'].astype(str).str.strip() == str(self.selected_zavod).strip()
-            if mask.any():
-                df.loc[mask, "Joylashgan o'rni"] = yangi_joy
-                df.to_excel(EXCEL_PATH, index=False)
+        data = load_excel_database()
+        if data:
+            found = False
+            for r in data:
+                if r.get('Zavod raqami', '').strip() == str(self.selected_zavod).strip():
+                    r["Joylashgan o'rni"] = yangi_joy
+                    found = True
+                    break
+            
+            if found:
+                save_all_data_to_excel(data)
                 self.msg_label.color = (0, 0.6, 0.3, 1)
                 self.msg_label.text = f"Muvaffaqiyatli! Zavod № [{self.selected_zavod}] stansiyaga o'rnatildi."
-                
-                row = df[mask].iloc[0]
-                plata = str(row.get('Plata', '')).upper()
-                zavod = str(row.get('Zavod raqami', '')).upper()
-                inv = str(row.get('Inv raqami', ''))
-                
-                info_str = (
-                    f"[b]O'rnartildi (Saqlandi ✅):[/b]\n"
-                    f"• Plata nomi: {plata}\n"
-                    f"• Zavod №: {zavod}\n"
-                    f"• Inv №: {inv}\n"
-                    f"• Yangi stansiya: [color=008800]{yangi_joy}[/color]"
-                )
-                self.selected_plata_lbl.text = info_str
-
                 self.zavod_input.text = ""
                 self.manual_yangi_joy.text = ""
                 self.selected_zavod = ""
@@ -1337,18 +1330,22 @@ class EditPlataScreen(Screen):
         Clock.schedule_once(lambda dt: self.save_changes(), 0.3)
 
     def save_changes(self):
-        df = load_excel_database()
-        if df is not None:
-            mask = df['Zavod raqami'].astype(str).str.strip() == str(self.zavod_original).strip()
-            if mask.any():
-                df.loc[mask, 'Qurilma'] = self.qurilma_input.text.strip()
-                df.loc[mask, 'Plata'] = self.plata_input.text.strip().upper()
-                df.loc[mask, 'Zavod raqami'] = self.zavod_input.text.strip().upper()
-                df.loc[mask, 'Inv raqami'] = self.inv_input.text.strip()
-                df.loc[mask, 'Holati'] = self.holat_input.text.strip()
-                df.loc[mask, "Joylashgan o'rni"] = self.joy_input.text.strip()
-                
-                df.to_excel(EXCEL_PATH, index=False)
+        data = load_excel_database()
+        if data:
+            found = False
+            for r in data:
+                if r.get('Zavod raqami', '').strip() == str(self.zavod_original).strip():
+                    r['Qurilma'] = self.qurilma_input.text.strip()
+                    r['Plata'] = self.plata_input.text.strip().upper()
+                    r['Zavod raqami'] = self.zavod_input.text.strip().upper()
+                    r['Inv raqami'] = self.inv_input.text.strip()
+                    r['Holati'] = self.holat_input.text.strip()
+                    r["Joylashgan o'rni"] = self.joy_input.text.strip()
+                    found = True
+                    break
+            
+            if found:
+                save_all_data_to_excel(data)
                 self.msg_label.color = (0, 0.6, 0.3, 1)
                 self.msg_label.text = "Muvaffaqiyatli saqlandi!"
                 Clock.schedule_once(lambda dt: setattr(self.manager, 'current', 'inv_screen'), 1.0)
@@ -1374,7 +1371,6 @@ class InventoryScreen(Screen):
         
         layout.add_widget(TopBar('Invertarizatsiya', back_callback=lambda x: setattr(self.manager, 'current', 'platalar_menu')))
         
-        # Qidiruv paneli
         top_search_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=42, spacing=8)
         self.query_input = TextInput(hint_text='Plata nomi yoki zavod raqami...', multiline=False, font_size=13)
         self.query_input.bind(text=self.trigger_search)
@@ -1390,7 +1386,6 @@ class InventoryScreen(Screen):
         top_search_layout.add_widget(btn_clear_inv)
         layout.add_widget(top_search_layout)
 
-        # QURILMALARNI SELEKT QILISH PANELI
         layout.add_widget(AdaptiveLabel(text="Qurilmani tanlang:", font_size=13, bold=True, size_hint_y=None, height=20, color=(0.2, 0.2, 0.2, 1), halign='left'))
 
         self.qur_scroll = ScrollView(size_hint_y=None, height=110)
@@ -1411,16 +1406,14 @@ class InventoryScreen(Screen):
         self.add_widget(layout)
 
     def load_qurilmalar_buttons(self):
-        """Bazada bor barcha qurilmalarga interaktiv Tugmalar yasash"""
         self.qur_grid.clear_widgets()
         self.selected_qurilmalar.clear()
         self.qur_buttons.clear()
 
-        df = load_excel_database()
-        if df is not None and 'Qurilma' in df.columns:
-            df['Normalized_Qurilma'] = df['Qurilma'].apply(normalize_qurilma_name)
-            raw_qurilmalar = df['Normalized_Qurilma'].dropna().unique()
-            qurilmalar = sorted([str(q) for q in raw_qurilmalar if q is not None])
+        data = load_excel_database()
+        if data:
+            raw_qurilmalar = [r.get('Qurilma', '') for r in data if r.get('Qurilma')]
+            qurilmalar = sorted([str(q) for q in set(normalize_qurilma_name(q) for q in raw_qurilmalar if normalize_qurilma_name(q) is not None)])
 
             for q in qurilmalar:
                 btn = QurilmaSelectButton(q_name=q)
@@ -1429,7 +1422,6 @@ class InventoryScreen(Screen):
                 self.qur_buttons.append(btn)
 
     def toggle_qurilma_selection(self, instance, q_name):
-        """Tugma bosilganda o'sha qurilmaga ko'ra platalarni avtomatik saralab beradi"""
         self.query_input.text = ""
         if instance.state == 'down':
             self.selected_qurilmalar.add(q_name)
@@ -1439,7 +1431,6 @@ class InventoryScreen(Screen):
         self.filter_by_selected_qurilmalar()
 
     def filter_by_selected_qurilmalar(self):
-        """Tanlangan qurilmalar bo'yicha platalarni ko'rsatish"""
         self.spinner.opacity = 1
         self.result_layout.clear_widgets()
         self.msg_topilmadi.text = ""
@@ -1448,12 +1439,11 @@ class InventoryScreen(Screen):
             self.spinner.opacity = 0
             return
 
-        df = load_excel_database()
-        if df is not None:
-            df['Normalized_Qurilma'] = df['Qurilma'].apply(normalize_qurilma_name)
-            filtrlangan = df[df['Normalized_Qurilma'].astype(str).str.strip().isin(self.selected_qurilmalar)]
+        data = load_excel_database()
+        if data:
+            filtrlangan = [r for r in data if normalize_qurilma_name(r.get('Qurilma', '')) in self.selected_qurilmalar]
 
-            if not filtrlangan.empty:
+            if filtrlangan:
                 self.result_layout.add_widget(AdaptiveLabel(text=f"Tanlangan qurilmalar platalari (Jami: {len(filtrlangan)} ta):", font_size=14, bold=True, color=(0.0, 0.45, 0.45, 1), size_hint_y=None, height=30, halign='left'))
                 self.render_items_list(filtrlangan)
             else:
@@ -1487,14 +1477,14 @@ class InventoryScreen(Screen):
         Clock.schedule_once(lambda dt: self.perform_search(val), 0.25)
 
     def perform_search(self, val):
-        df = load_excel_database()
-        if df is not None:
+        data = load_excel_database()
+        if data:
             if any(char.isalpha() for char in val):
-                matched = df[df['Plata'].astype(str).str.lower().str.contains(val)]
+                matched = [r for r in data if val in r.get('Plata', '').lower()]
             else:
-                matched = df[df['Zavod raqami'].astype(str).str.lower().str.endswith(val)]
+                matched = [r for r in data if r.get('Zavod raqami', '').lower().endswith(val)]
 
-            if not matched.empty:
+            if matched:
                 self.result_layout.add_widget(AdaptiveLabel(text=f"Topildi! Jami mos keluvchi: {len(matched)} ta", font_size=15, bold=True, color=(0.0, 0.45, 0.45, 1), size_hint_y=None, height=35, halign='left'))
                 self.render_items_list(matched, val)
             else:
@@ -1505,9 +1495,8 @@ class InventoryScreen(Screen):
         
         self.spinner.opacity = 0
 
-    def render_items_list(self, df_data, val=""):
-        """Elementlarni ketma-ket ekranga chiqarish"""
-        for idx, row in df_data.iterrows():
+    def render_items_list(self, data_list, val=""):
+        for row in data_list:
             qurilma = str(row.get('Qurilma', ''))
             plata = str(row.get('Plata', '')).upper()
             zavod = str(row.get('Zavod raqami', '')).upper()
@@ -1577,12 +1566,17 @@ class InventoryScreen(Screen):
             self.result_layout.add_widget(sep)
 
     def mark_as_checked(self, zavod_num):
-        df = load_excel_database()
-        if df is not None:
-            mask = df['Zavod raqami'].astype(str).str.strip() == str(zavod_num).strip()
-            if mask.any():
-                df.loc[mask, "Tekshirilgan"] = "✅ Tekshirilgan"
-                df.to_excel(EXCEL_PATH, index=False)
+        data = load_excel_database()
+        if data:
+            found = False
+            for r in data:
+                if r.get('Zavod raqami', '').strip() == str(zavod_num).strip():
+                    r["Tekshirilgan"] = "✅ Tekshirilgan"
+                    found = True
+                    break
+            
+            if found:
+                save_all_data_to_excel(data)
                 self.msg_topilmadi.color = (0, 0.6, 0.3, 1)
                 self.msg_topilmadi.text = f"Zavod № [{zavod_num}] tekshirildi deb belgilandi!"
                 
@@ -1592,10 +1586,10 @@ class InventoryScreen(Screen):
                     self.filter_by_selected_qurilmalar()
 
     def delete_plata(self, zavod_num):
-        df = load_excel_database()
-        if df is not None:
-            df = df[df['Zavod raqami'].astype(str).str.strip() != str(zavod_num).strip()]
-            df.to_excel(EXCEL_PATH, index=False)
+        data = load_excel_database()
+        if data:
+            new_data = [r for r in data if r.get('Zavod raqami', '').strip() != str(zavod_num).strip()]
+            save_all_data_to_excel(new_data)
             self.msg_topilmadi.color = (0.8, 0.3, 0.3, 1)
             self.msg_topilmadi.text = f"Zavod № [{zavod_num}] bazadan o'chirildi!"
             

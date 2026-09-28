@@ -4,7 +4,7 @@ package.name = telekomombor
 package.domain = org.telekom.ombor
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,xlsx
-requirements = python3,kivy==2.3.0,pandas,openpyxl,requests
+requirements = python3,kivy==2.3.0,numpy,pandas,openpyxl,requests
 version = 1.0
 permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, INTERNET
 android.api = 33
